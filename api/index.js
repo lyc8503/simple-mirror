@@ -81,8 +81,8 @@ function proxyRequest(req, res, targetUrl, options = {}) {
 }
 
 function handleRequest(req, res) {
+  console.log(req)
   const host = req.headers.host || "";
-  const subdomain = host.split(".")[0];
   const url = new URL(req.url, `http://${host}`);
 
   console.log(`${req.method} ${host}${url.pathname}`);
@@ -189,6 +189,10 @@ function handleRequest(req, res) {
   res.writeHead(404, { "Content-Type": "text/plain" });
   res.end("Not Found");
 }
+
+
+// For vercel
+module.exports = handleRequest;
 
 const server = http.createServer(handleRequest);
 
