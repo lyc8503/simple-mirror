@@ -1,0 +1,11 @@
+{
+  "name": "simple-mirror",
+  "version": "1.0.0",
+  "description": "A simple (and crude) script to mirror common websites",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "",
+  "license": "ISC"
+}
