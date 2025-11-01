@@ -1,7 +1,6 @@
 const http = require("http");
 const https = require("https");
 const { URL } = require("url");
-const fs = require("fs");
 
 const PROXY_DOMAIN = process.env.PROXY_DOMAIN || "exmaple.com";
 const PORT = process.env.PORT || 3000;
@@ -15,7 +14,7 @@ const GOOGLE_SEARCH_HTML = `
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Google Search Clone</title>
+    <title>Google Search</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #fff; }
         .container { max-width: 600px; margin: 0 auto; }
@@ -98,7 +97,7 @@ const GOOGLE_SEARCH_HTML = `
                     
                     if (data.error) throw new Error(data.error);
                     
-                    if (!data.items || data.items.length === 0) {
+                    if (!data.items || data.items.length === 0 || startIndex >= 51) {
                         hasMoreResults = false;
                         if (startIndex === 1) resultsContainer.innerHTML = '<p>No results found.</p>';
                         return;
@@ -106,6 +105,7 @@ const GOOGLE_SEARCH_HTML = `
                     
                     displayResults(data.items);
                     startIndex += 10;
+
                 } catch (error) {
                     console.error('Error fetching search results:', error);
                     resultsContainer.innerHTML = "<p>Error: " + error.message + ". Please check the server console for details.</p>";
@@ -168,7 +168,12 @@ const GOOGLE_SEARCH_HTML = `
             }
 
             function showLoader() { loaderContainer.innerHTML = '<div class="loader">Loading more results...</div>'; }
-            function hideLoader() { loaderContainer.innerHTML = ''; }
+            function hideLoader() {
+                loaderContainer.innerHTML = '';
+                if (!hasMoreResults && currentQuery) {
+                    loaderContainer.innerHTML = '<div class="loader">No more results.</div>';
+                }
+            }
         });
     </script>
 </body>
