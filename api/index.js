@@ -302,12 +302,33 @@ function serveGoogleSearch(req, res) {
       // Request the resource and pipe it back to the client.
       https
         .get(proxiedUrl.href, (resourceRes) => {
-          const contentType =
-            resourceRes.headers["content-type"] || "application/octet-stream";
-          res.writeHead(resourceRes.statusCode, {
-            "Content-Type": contentType,
-          });
-          resourceRes.pipe(res, { end: true });
+          // Check for 301 or 302 redirect
+          if (
+            (resourceRes.statusCode === 301 ||
+              resourceRes.statusCode === 302) &&
+            resourceRes.headers.location
+          ) {
+            // Get the redirect location
+            const redirectUrl = resourceRes.headers.location;
+
+            // Create a new location that points back to this proxy
+            const newLocation = `/proxy/resource?url=${encodeURIComponent(redirectUrl)}`;
+
+            // Send the redirect response to the client with the modified location
+            res.writeHead(resourceRes.statusCode, {
+              ...resourceRes.headers, // Copy original headers
+              Location: newLocation, // Set the new location
+            });
+            res.end();
+          } else {
+            // For other status codes, pipe the response back to the client as before
+            const contentType =
+              resourceRes.headers["content-type"] || "application/octet-stream";
+            res.writeHead(resourceRes.statusCode, {
+              "Content-Type": contentType,
+            });
+            resourceRes.pipe(res, { end: true });
+          }
         })
         .on("error", (e) => {
           console.error(`Proxy error: ${e.message}`);
