@@ -359,6 +359,12 @@ function handleRequest(req, res) {
 
   console.log(`${req.method} ${host}${url.pathname}`);
 
+  if (url.pathname == "/robots.txt") {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("User-agent: *\nDisallow: /");
+    return;
+  }
+
   // g.domain - Google proxy
   if (subdomain === `g`) {
     serveGoogleSearch(req, res);
