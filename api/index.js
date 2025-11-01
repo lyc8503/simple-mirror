@@ -41,7 +41,6 @@ const GOOGLE_SEARCH_HTML = `
 <body>
     <div class="container">
         <div class="logo">
-            <!-- Modified: Image is now loaded through our server proxy -->
             <img src="/proxy/resource?url=https%3A%2F%2Fwww.google.com%2Fimages%2Fbranding%2Fgooglelogo%2F2x%2Fgooglelogo_color_272x92dp.png" alt="Google Logo">
         </div>
         <div class="search-bar">
@@ -59,8 +58,30 @@ const GOOGLE_SEARCH_HTML = `
             const searchInput = document.getElementById('search-input');
             const resultsContainer = document.getElementById('results');
             const loaderContainer = document.getElementById('loader-container');
+            
+            // Get the base domain from the current location to construct proxy URLs dynamically.
+            const PROXY_DOMAIN = window.location.hostname.split('.').slice(1).join('.');
 
-            // --- Configuration removed, API key is now on the server-side ---
+            const proxyRules = {
+                'github.com': 'gh',
+                'raw.githubusercontent.com': 'ghraw',
+                'en.wikipedia.org': 'w',
+                'zh.wikipedia.org': 'wzh',
+                'upload.wikimedia.org': 'wikiupload'
+            };
+
+            function rewriteLink(originalUrl) {
+                try {
+                    const url = new URL(originalUrl);
+                    const subdomain = proxyRules[url.hostname];
+                    if (subdomain) {
+                        return \`https://\${subdomain}.\${PROXY_DOMAIN}\${url.pathname}\${url.search}\${url.hash}\`;
+                    }
+                } catch (e) {
+                    console.error('Invalid URL:', originalUrl);
+                }
+                return originalUrl; // Return original URL if no rule matches or if URL is invalid
+            }
             
             let currentQuery = '', startIndex = 1, isLoading = false, hasMoreResults = true;
 
@@ -86,26 +107,19 @@ const GOOGLE_SEARCH_HTML = `
                 if (isLoading || !hasMoreResults) return;
                 isLoading = true;
                 showLoader();
-
-                // Modified: Request our own server's API endpoint
                 const url = "/api/search?q=" + encodeURIComponent(currentQuery) + "&start=" + startIndex;
-
                 try {
                     const response = await fetch(url);
                     if (!response.ok) throw new Error("Server error! status: " + response.status);
                     const data = await response.json();
-                    
                     if (data.error) throw new Error(data.error);
-                    
                     if (!data.items || data.items.length === 0 || startIndex >= 51) {
                         hasMoreResults = false;
                         if (startIndex === 1) resultsContainer.innerHTML = '<p>No results found.</p>';
                         return;
                     }
-                    
                     displayResults(data.items);
                     startIndex += 10;
-
                 } catch (error) {
                     console.error('Error fetching search results:', error);
                     resultsContainer.innerHTML = "<p>Error: " + error.message + ". Please check the server console for details.</p>";
@@ -117,8 +131,8 @@ const GOOGLE_SEARCH_HTML = `
             
             function highlightTerms(text, query) {
                 if (!query) return text;
-                const escapeRegex = (str) => str.replace(/[.*+?^$}{()|[\]\\]/g, '\\$&');
-                const terms = query.split(/\s+/).filter(term => term.length > 0).map(escapeRegex);
+                const escapeRegex = (str) => str.replace(/[.*+?^$}{()|[\\]\\\\]/g, '\\\\$&');
+                const terms = query.split(/\\s+/).filter(term => term.length > 0).map(escapeRegex);
                 if (terms.length === 0) return text;
                 const regex = new RegExp("(" + terms.join('|') + ")", 'gi');
                 return text.replace(regex, '<strong>$&</strong>');
@@ -132,7 +146,6 @@ const GOOGLE_SEARCH_HTML = `
                     let hostname = item.displayLink;
                     try { hostname = new URL(item.link).hostname; } catch (e) {}
                     
-                    // Modified: Favicon is also loaded through our proxy
                     const faviconGoogleUrl = "https://www.google.com/s2/favicons?domain=" + hostname + "&sz=16";
                     const faviconUrl = "/proxy/resource?url=" + encodeURIComponent(faviconGoogleUrl);
 
@@ -151,7 +164,8 @@ const GOOGLE_SEARCH_HTML = `
 
                     const titleLink = document.createElement('a');
                     titleLink.classList.add('result-title');
-                    titleLink.href = item.link;
+                    // Rewrite the link to use the proxy if a rule matches
+                    titleLink.href = rewriteLink(item.link);
                     titleLink.target = '_blank';
                     titleLink.rel = 'noopener';
                     titleLink.innerHTML = highlightTerms(item.title, currentQuery);
@@ -180,10 +194,19 @@ const GOOGLE_SEARCH_HTML = `
 </html>
 `;
 
-function checkAuth(req) {
+function checkAuth(req, res) {
   const authHeader = req.headers.authorization;
   const expectedAuth = "Basic " + AUTH;
-  return authHeader === expectedAuth;
+  if (authHeader !== expectedAuth) {
+    res.writeHead(401, {
+      "WWW-Authenticate": `Basic realm="Authorization required"`,
+      "Content-Type": "text/plain",
+    });
+    res.end("Unauthorized");
+    return false;
+  } else {
+    return true;
+  }
 }
 
 function proxyRequest(req, res, targetUrl, options = {}) {
@@ -373,12 +396,7 @@ function handleRequest(req, res) {
 
   // gh.domain - GitHub proxy (authentication required)
   if (subdomain === `gh`) {
-    if (!checkAuth(req)) {
-      res.writeHead(401, {
-        "WWW-Authenticate": 'Basic realm="Username required"',
-        "Content-Type": "text/plain",
-      });
-      res.end("Unauthorized");
+    if (!checkAuth(req, res)) {
       return;
     }
 
@@ -401,20 +419,24 @@ function handleRequest(req, res) {
     return;
   }
 
-  // wiki.domain - Wikipedia EN proxy
-  if (subdomain === `wiki`) {
+  // w.domain - Wikipedia EN proxy
+  if (subdomain === 'w') {
+    if (!checkAuth(req, res)) {
+      return;
+    }
+
     proxyRequest(
       req,
       res,
       `https://en.wikipedia.org${url.pathname}${url.search}`,
       {
         locationReplacements: [
-          ["https://en.wikipedia.org", `https://wiki.${PROXY_DOMAIN}`],
-          ["https://zh.wikipedia.org", `https://wikizh.${PROXY_DOMAIN}`],
+          ["https://en.wikipedia.org", `https://w.${PROXY_DOMAIN}`],
+          ["https://zh.wikipedia.org", `https://wzh.${PROXY_DOMAIN}`],
         ],
         replacements: [
-          ["//en.wikipedia.org", `//wiki.${PROXY_DOMAIN}`],
-          ["//zh.wikipedia.org", `//wikizh.${PROXY_DOMAIN}`],
+          ["//en.wikipedia.org", `//w.${PROXY_DOMAIN}`],
+          ["//zh.wikipedia.org", `//wzh.${PROXY_DOMAIN}`],
           ["//upload.wikimedia.org", `//wikiupload.${PROXY_DOMAIN}`],
         ],
       },
@@ -422,20 +444,24 @@ function handleRequest(req, res) {
     return;
   }
 
-  // wikizh.domain - Wikipedia ZH proxy
-  if (subdomain === `wikizh`) {
+  // wzh.domain - Wikipedia ZH proxy
+  if (subdomain === `wzh`) {
+    if (!checkAuth(req, res)) {
+      return;
+    }
+
     proxyRequest(
       req,
       res,
       `https://zh.wikipedia.org${url.pathname}${url.search}`,
       {
         locationReplacements: [
-          ["https://en.wikipedia.org", `https://wiki.${PROXY_DOMAIN}`],
-          ["https://zh.wikipedia.org", `https://wikizh.${PROXY_DOMAIN}`],
+          ["https://en.wikipedia.org", `https://w.${PROXY_DOMAIN}`],
+          ["https://zh.wikipedia.org", `https://wzh.${PROXY_DOMAIN}`],
         ],
         replacements: [
-          ["//en.wikipedia.org", `//wiki.${PROXY_DOMAIN}`],
-          ["//zh.wikipedia.org", `//wikizh.${PROXY_DOMAIN}`],
+          ["//en.wikipedia.org", `//w.${PROXY_DOMAIN}`],
+          ["//zh.wikipedia.org", `//wzh.${PROXY_DOMAIN}`],
           ["//upload.wikimedia.org", `//wikiupload.${PROXY_DOMAIN}`],
         ],
       },
