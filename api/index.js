@@ -4,9 +4,13 @@ const { URL } = require("url");
 
 const PROXY_DOMAIN = process.env.PROXY_DOMAIN || "exmaple.com";
 const PORT = process.env.PORT || 3000;
+
+const ENABLE_AUTH = false;
 const AUTH = process.env.AUTH || "dXNlcjo="; // user:
 const SEARCH_ENGINE_ID = process.env.SEARCH_ENGINE_ID || "";
 const SEARCH_API_KEY = process.env.SEARCH_API_KEY || "";
+
+const ORIGIN_HOST = process.env.ORIGIN_HOST || "https://example.com";
 
 const GOOGLE_SEARCH_HTML = `
 <!DOCTYPE html>
@@ -195,6 +199,10 @@ const GOOGLE_SEARCH_HTML = `
 `;
 
 function checkAuth(req, res) {
+  if (!ENABLE_AUTH) {
+    return true;
+  }
+
   const authHeader = req.headers.authorization;
   const expectedAuth = "Basic " + AUTH;
   if (authHeader !== expectedAuth) {
@@ -209,26 +217,27 @@ function checkAuth(req, res) {
   }
 }
 
-function proxyRequest(req, res, targetUrl, options = {}) {
+function proxyRequest(req, res, targetUrl, options = {}, overrideHostname = null) {
   const target = new URL(targetUrl);
+  const originHost = overrideHostname || target.hostname;
 
   const proxyOptions = {
     hostname: target.hostname,
-    port: target.port || 443,
+    port: target.port || (target.protocol === "https:" ? 443 : 80),
     path: target.pathname + target.search,
     method: req.method,
     headers: {
       ...req.headers,
-      host: target.hostname,
       "accept-encoding": "identity",
     },
   };
 
   // Remove original host headers
-  delete proxyOptions.headers["host"];
-  proxyOptions.headers["host"] = target.hostname;
+  delete proxyOptions.headers["Host"];
+  proxyOptions.headers["host"] = originHost;
 
-  const proxyReq = https.request(proxyOptions, (proxyRes) => {
+  const requestLib = target.protocol === "https:" ? https : http;
+  const proxyReq = requestLib.request(proxyOptions, (proxyRes) => {
     let body = "";
 
     // Process response headers
@@ -475,6 +484,16 @@ function handleRequest(req, res) {
       req,
       res,
       `https://upload.wikimedia.org${url.pathname}${url.search}`,
+    );
+    return;
+  }
+
+  if (subdomain === 'sub' || subdomain === 'bot') {
+    proxyRequest(
+      req,
+      res,
+      `${ORIGIN_HOST}${url.pathname}${url.search}`,
+      {}, host,
     );
     return;
   }
