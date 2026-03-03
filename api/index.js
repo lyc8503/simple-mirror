@@ -12,6 +12,13 @@ const SEARCH_API_KEY = process.env.SEARCH_API_KEY || "";
 
 const ORIGIN_HOST = process.env.ORIGIN_HOST || "https://example.com";
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+  "Access-Control-Max-Age": "86400",
+};
+
 const GOOGLE_SEARCH_HTML = `
 <!DOCTYPE html>
 <html lang="en">
@@ -384,6 +391,160 @@ function serveGoogleSearch(req, res) {
   }
 }
 
+function collectBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+function handleCorsProxy(req, res) {
+  // Handle preflight
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, CORS_HEADERS);
+    res.end();
+    return;
+  }
+
+  if (req.method !== "POST") {
+    res.writeHead(405, { ...CORS_HEADERS, "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Only POST method is allowed" }));
+    return;
+  }
+
+  collectBody(req)
+    .then((rawBody) => {
+      let payload;
+      try {
+        payload = JSON.parse(rawBody.toString("utf8"));
+      } catch (e) {
+        res.writeHead(400, { ...CORS_HEADERS, "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON body" }));
+        return;
+      }
+
+      const { url: targetUrl, method, headers, body } = payload;
+
+      if (!targetUrl) {
+        res.writeHead(400, { ...CORS_HEADERS, "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: '"url" field is required' }));
+        return;
+      }
+
+      let target;
+      try {
+        target = new URL(targetUrl);
+      } catch (e) {
+        res.writeHead(400, { ...CORS_HEADERS, "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid target URL" }));
+        return;
+      }
+
+      const reqMethod = (method || "GET").toUpperCase();
+      const reqHeaders = headers || {};
+
+      // Build the outgoing request options
+      const options = {
+        hostname: target.hostname,
+        port: target.port || (target.protocol === "https:" ? 443 : 80),
+        path: target.pathname + target.search,
+        method: reqMethod,
+        headers: {
+          ...reqHeaders,
+        },
+      };
+
+      // Prepare body to send
+      let bodyToSend = null;
+      if (body !== undefined && body !== null) {
+        if (typeof body === "string") {
+          bodyToSend = Buffer.from(body, "utf8");
+        } else if (Buffer.isBuffer(body)) {
+          bodyToSend = body;
+        } else {
+          // Object/array — serialize as JSON
+          bodyToSend = Buffer.from(JSON.stringify(body), "utf8");
+          if (!options.headers["content-type"] && !options.headers["Content-Type"]) {
+            options.headers["Content-Type"] = "application/json";
+          }
+        }
+        options.headers["Content-Length"] = bodyToSend.length;
+      }
+
+      const requestLib = target.protocol === "https:" ? https : http;
+
+      const proxyReq = requestLib.request(options, (proxyRes) => {
+        const responseChunks = [];
+        proxyRes.on("data", (chunk) => responseChunks.push(chunk));
+        proxyRes.on("end", () => {
+          const responseBuffer = Buffer.concat(responseChunks);
+
+          // Build response headers — forward select upstream headers + CORS
+          const fwdHeaders = { ...CORS_HEADERS };
+          const forwardHeaderNames = [
+            "content-type",
+            "content-disposition",
+            "cache-control",
+            "etag",
+            "last-modified",
+            "x-request-id",
+          ];
+          for (const h of forwardHeaderNames) {
+            if (proxyRes.headers[h]) {
+              fwdHeaders[h] = proxyRes.headers[h];
+            }
+          }
+
+          // Return a structured JSON response
+          const contentType = proxyRes.headers["content-type"] || "";
+          let responseBody;
+          if (contentType.includes("application/json")) {
+            try {
+              responseBody = JSON.parse(responseBuffer.toString("utf8"));
+            } catch {
+              responseBody = responseBuffer.toString("base64");
+            }
+          } else if (
+            contentType.includes("text/") ||
+            contentType.includes("application/xml") ||
+            contentType.includes("application/javascript")
+          ) {
+            responseBody = responseBuffer.toString("utf8");
+          } else {
+            responseBody = responseBuffer.toString("base64");
+          }
+
+          res.writeHead(200, { ...CORS_HEADERS, "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              status: proxyRes.statusCode,
+              headers: proxyRes.headers,
+              body: responseBody,
+            })
+          );
+        });
+      });
+
+      proxyReq.on("error", (err) => {
+        console.error("CORS proxy error:", err);
+        res.writeHead(502, { ...CORS_HEADERS, "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Failed to fetch target URL", detail: err.message }));
+      });
+
+      if (bodyToSend) {
+        proxyReq.write(bodyToSend);
+      }
+      proxyReq.end();
+    })
+    .catch((err) => {
+      console.error("CORS proxy body read error:", err);
+      res.writeHead(500, { ...CORS_HEADERS, "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Internal server error" }));
+    });
+}
+
 function handleRequest(req, res) {
   const host = req.headers.host || "";
   const url = new URL(req.url, `http://${host}`);
@@ -394,6 +555,12 @@ function handleRequest(req, res) {
   if (url.pathname == "/robots.txt") {
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("User-agent: *\nDisallow: /");
+    return;
+  }
+
+  // CORS proxy endpoint
+  if (url.pathname === "/cors" || url.pathname === "/cors/") {
+    handleCorsProxy(req, res);
     return;
   }
 
