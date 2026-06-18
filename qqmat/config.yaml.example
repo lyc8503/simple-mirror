@@ -1,0 +1,13 @@
+# OneBot (QQ) config
+onebot:
+  ws_host: "0.0.0.0"
+  ws_port: 8080
+  http_url: "http://127.0.0.1:5700"
+  qq_group_id: 123456789
+
+# Matrix config
+matrix:
+  homeserver: "https://matrix-client.matrix.org"
+  user_id: "@you:matrix.org"
+  access_token: "syt_your_token_here"
+  room_id: "!roomid:matrix.org"
