@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Nutrimatic CN (AI slop ver.)</title>
+    <style>
+      body {
+        font:
+          16px/1.6 system-ui,
+          sans-serif;
+        max-width: 820px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      .tabs {
+        border-bottom: 1px solid #ddd;
+        margin-bottom: 1rem;
+      }
+      .tab {
+        display: inline-block;
+        padding: 0.4rem 1rem;
+        cursor: pointer;
+        border: 1px solid transparent;
+        border-bottom: none;
+      }
+      .tab.active {
+        border-color: #ddd;
+        border-bottom: 2px solid #333;
+      }
+      input {
+        width: 100%;
+        padding: 0.5rem;
+        font-size: 1rem;
+        box-sizing: border-box;
+      }
+      button {
+        margin-top: 0.5rem;
+        padding: 0.4rem 1.2rem;
+        font-size: 1rem;
+      }
+      #src {
+        background: #f5f5f5;
+        border: 1px solid #ddd;
+        padding: 0.6rem;
+        font:
+          13px/1.5 ui-monospace,
+          monospace;
+        white-space: pre;
+        overflow-x: auto;
+        margin-top: 1rem;
+        display: none;
+      }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-all;
+        margin-top: 1rem;
+      }
+      .hint {
+        color: #666;
+        font-size: 0.85rem;
+        margin-top: 1.5rem;
+        border-top: 1px solid #ddd;
+        padding-top: 0.5rem;
+      }
+      code {
+        background: #f2f2f2;
+        padding: 0 0.3em;
+      }
+      .hidden {
+        display: none;
+      }
+      .charbox {
+        font-size: 5rem;
+        line-height: 1.3;
+        margin: 0.5rem 0;
+      }
+      table {
+        border-collapse: collapse;
+        margin-top: 0.5rem;
+      }
+      td,
+      th {
+        border: 1px solid #ddd;
+        padding: 0.2rem 0.6rem;
+        text-align: left;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Nutrimatic CN (AI slop ver.)</h1>
+    <div class="tabs">
+      <span class="tab active" id="tab-search" onclick="switchTab('search')"
+        >检索</span
+      >
+      <span class="tab" id="tab-char" onclick="switchTab('char')"
+        >汉字数据</span
+      >
+    </div>
+
+    <div id="panel-search">
+      <label
+        >词库：
+        <select id="dict-select" onchange="loadDict()">
+          <option value="jieba">jieba 词典</option>
+          <option value="tencent">腾讯词表</option>
+          <option value="idiom">成语</option>
+        </select>
+      </label>
+      <input id="q" placeholder="例如: {py:shang4 bj:女}{py:3} 或 好{py:3}" />
+      <button onclick="go()">检索</button>
+      <pre id="src"></pre>
+      <pre id="out">加载数据中…</pre>
+      <div class="hint">
+        <code>py</code> 拼音： <code>py:shang</code> 任意音调 ·
+        <code>py:3</code> 第三声 · <code>py:shang4</code> 上(shang第四声) ·
+        <code>py:sh-</code> 声母sh · <code>py:-ang</code> 韵母ang ·
+        <code>py:-ang3</code> 韵母ang且三声 <br /><code>bj</code> 部件：<code
+          >bj:女</code
+        >
+        部件包含女（完全拆散，如 品=口口口）·
+        <code>bj:⿰女子</code> 字形匹配（IDS 结构） <br /><code>bh</code>
+        笔画：<code>bh:4</code> 共4画 · <code>bh:横2</code> 第二画是横
+        <br /><code>zc</code> 组词：<code>zc:#日</code> “x日”是词表中的词 ·
+        <code>zc:大#</code> “大x”是词 · <code>zc:好#好</code> “好x好”是词
+        <br />空条件 <code>{}</code> 匹配任意字；<code>{}</code> 内空格/逗号 =
+        且，竖线 = 或
+        <br />三个词典：jieba（34.9万词）、腾讯词表（200万词，含标点）、成语（3万条，按词频排序）
+        <br />示例：
+        <code>{py:shang4 bj:女}{py:3}</code> 首字读shang4且含女部件，次字三声 ·
+        <code>好{py:3}</code> “好”后接三声字 ·
+        <code>{bj:女|bj:子}</code> 含女或含子的字
+      </div>
+    </div>
+
+    <div id="panel-char" class="hidden">
+      <p>输入汉字查看它在数据表中的拼音、笔画、笔顺与部件。</p>
+      <input id="qchar" placeholder="例如: 好" />
+      <button onclick="goChar()">查字</button>
+      <div id="charout"></div>
+    </div>
+
+    <script src="nutri.js"></script>
+    <script>
+      let WORDS = []; // {word, freq, meta}
+      let WORDSET = new Set(); // 词表集合, 供 zc 组词条件使用
+      const DICT_FILES = {
+        jieba: "dict/jieba.txt",
+        tencent: "dict/tencent_ailab.txt",
+        idiom: "dict/idiom.txt",
+      };
+      function switchTab(name) {
+        document
+          .getElementById("tab-search")
+          .classList.toggle("active", name === "search");
+        document
+          .getElementById("tab-char")
+          .classList.toggle("active", name === "char");
+        document
+          .getElementById("panel-search")
+          .classList.toggle("hidden", name !== "search");
+        document
+          .getElementById("panel-char")
+          .classList.toggle("hidden", name !== "char");
+      }
+      let loadSeq = 0; // 词库加载序号, 防止快速切换时的竞态
+      function loadDict() {
+        const key = document.getElementById("dict-select").value;
+        const file = DICT_FILES[key];
+        const seq = ++loadSeq;
+        WORDS = [];
+        WORDSET = new Set();
+        const out = document.getElementById("out");
+        out.textContent = "加载词库中…";
+        fetch(file)
+          .then((r) => r.text())
+          .then((data) => {
+            if (seq !== loadSeq) return; // 已切换词库, 丢弃过期结果
+            // 纯文本: 每行一个词(已有顺序即频次序)
+            const lines = data.split("\n");
+            for (let i = 0; i < lines.length; i++) {
+              const w = lines[i].trim();
+              if (!w) continue;
+              WORDS.push({ word: w, freq: lines.length - i, meta: "" });
+              WORDSET.add(w);
+            }
+            // 单字补入(仅 jieba 需要, 保持能查单字)
+            if (key === "jieba") {
+              const seen = new Set(WORDS.map((x) => x.word));
+              const all = Object.keys(DATA.py).filter(
+                (ch) => ch.length === 1 && !seen.has(ch),
+              );
+              for (const ch of all) WORDS.push({ word: ch, freq: 1, meta: "" });
+            }
+            out.textContent = `数据已加载：${Object.keys(DATA.py).length} 字，当前词库 ${WORDS.length} 条`;
+          })
+          .catch((e) => {
+            out.textContent = "加载失败: " + e;
+          });
+      }
+      // 初始化: 先数据, 后词库
+      function init() {
+        fetch("data.json")
+          .then((r) => r.json())
+          .then((json) => {
+            initData(json);
+            loadDict();
+          })
+          .catch((e) => {
+            document.getElementById("out").textContent = "加载失败: " + e;
+          });
+      }
+      function go() {
+        const q = document.getElementById("q").value.trim();
+        if (!q) return;
+        const r = run(q);
+        const srcEl = document.getElementById("src");
+        if (r.error) {
+          srcEl.style.display = "none";
+          document.getElementById("out").textContent = r.error;
+          return;
+        }
+        srcEl.style.display = "block";
+        srcEl.textContent = r.src;
+        document.getElementById("out").textContent = r.words.length
+          ? r.words.length +
+            " 个结果（按词频）:\n" +
+            r.words
+              .map((x) => x.word + (x.meta ? " — " + x.meta : ""))
+              .join("\n")
+          : "无结果";
+      }
+      function goChar() {
+        const q = document.getElementById("qchar").value.trim();
+        const out = document.getElementById("charout");
+        if (!q) {
+          out.textContent = "请输入汉字";
+          return;
+        }
+        const d = lookupChar(q);
+        if (d.error) {
+          out.textContent = d.error;
+          return;
+        }
+        let h = `<div class="charbox">${d.char}</div>`;
+        h += `<p>总笔画：<b>${d.stroke ?? "无数据"}</b></p>`;
+        h +=
+          "<p>拼音：</p><table><tr><th>全拼</th><th>声母</th><th>韵母</th><th>音调</th></tr>";
+        for (const p of d.details) {
+          h += `<tr><td>${p.full}</td><td>${p.initial || "—"}</td><td>${p.final}</td><td>${p.tone}</td></tr>`;
+        }
+        h += "</table>";
+        if (d.order.length)
+          h += `<p>笔顺（${d.order.length}画）：${d.order.map((x, i) => i + 1 + "." + x).join(" ")}</p>`;
+        else h += "<p>笔顺：无数据</p>";
+        h += d.components.length
+          ? `<p>部件（完全拆散）：${d.components.join("、")}</p>`
+          : "<p>部件：无数据</p>";
+        h += d.forms.length
+          ? `<p>字形（IDS）：${d.forms.join(" ｜ ")}</p>`
+          : "";
+        out.innerHTML = h;
+      }
+      window.switchTab = switchTab;
+      window.go = go;
+      window.goChar = goChar;
+      window.loadDict = loadDict;
+      init();
+    </script>
+  </body>
+</html>
